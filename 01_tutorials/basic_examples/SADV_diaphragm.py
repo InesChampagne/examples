@@ -45,26 +45,39 @@ x_steps = [11090,
            11090, 11090
            ]
 y_steps = [4680, 
-          6000, 6000, 6000, 6000, 
+          6000, 6000, 6000, 6000, 6000,
            4680
            ]
 
 
-k_floor_shear = 14400
-# k_floor_shear = 30000
-k_floor = 41100 #N/mm
-# k_floor = 330000 #N/mm
 d_tie = 58 #mm
 max_disp_c = 2 #mm
 
+### L1
+k_floor_shear = 14400
+k_floor = 41100 #N/mm
 
-fixed_nodes_index = [(0,2), (0,4), (-1,0), (-1, 4)]
-# fixed_nodes_index = [(4,0), (8,0), (4,-1), (8,-1)]
+# fixed_nodes_index = [(0,2), (0,4), (-1,0), (-1, 4)] # X direction
+fixed_nodes_index = [(4,0), (8,0), (4,-1), (8,-1)] # Y direction
 # fixed_nodes_index = [(0,0), (-1,0), (-1,-1), (0,-1)]
 
-loads = {'x': -36900}
-# loads = {'y': -136250}
+# loads = {'x': -24600}
+# loads = {'x': -36900}
+# loads = {'y': 90900}
+loads = {'y': 136250}
 
+### ROOF
+# k_floor_shear = 12300
+# k_floor = 27000 #N/mm
+
+# fixed_nodes_index = [(0,1), (0,3), (-1,1), (-1, 3)] # X direction
+# fixed_nodes_index = [(6,0), (12,0), (6,-1), (12,-1)] # Y direction
+# fixed_nodes_index = [(0,0), (-1,0), (-1,-1), (0,-1)]
+
+# loads = {'x': -12700}
+# loads = {'x': -19100}
+# loads = {'y': 46900}
+# loads = {'y': 70400}
 
 node_matrix = []
 
@@ -130,8 +143,8 @@ L_tie = 11090 # mm
 k_tie = E_steel*(3.14*(d_tie/2)**2)/L_tie #N/mm
 
 
-loaded_nodes =  [node_matrix[i][-1] for i in range(n_lines)]
-# loaded_nodes =  [node_matrix[0][j] for j in range(n_column)]
+# loaded_nodes =  [node_matrix[i][-1] for i in range(n_lines)] # X direction
+loaded_nodes =  [node_matrix[0][j] for j in range(n_column)] # Y direction
 w_sec = 100
 h_sec = 100
 A_sec = w_sec*h_sec
@@ -367,8 +380,8 @@ for element in mdl.elements:
         section_forces.add(line, color=Color.blue(), linewidth=0.5+8*abs(sf_result.Fx_1/max_value))
     else :
         section_forces.add(line, color=Color.grey(), opacity=0.3)
-add_text_label(viewer=viewer, text=str(int(max_compression.Fx_1/1000))+ " kN", x=max_compression.reference_point.x+1000 , y= max_compression.reference_point.y, parent=section_forces, color = Color.blue(), scale=200, show=True)
-add_text_label(viewer=viewer, text=str(abs(int(max_tension.Fx_1/1000)))+ " kN", x=max_tension.reference_point.x+1000 , y= max_tension.reference_point.y, parent=section_forces, color = Color.red(), scale=200, show=True)
+# add_text_label(viewer=viewer, text=str(int(max_compression.Fx_1/1000))+ " kN", x=max_compression.reference_point.x+1000 , y= max_compression.reference_point.y, parent=section_forces, color = Color.blue(), scale=200, show=True)
+# add_text_label(viewer=viewer, text=str(abs(int(max_tension.Fx_1/1000)))+ " kN", x=max_tension.reference_point.x+1000 , y= max_tension.reference_point.y, parent=section_forces, color = Color.red(), scale=200, show=True)
         
 # BENDING MOMENT
 bending_sections = viewer.scene.add_group(name='SF MOMENT', show=True)
@@ -394,8 +407,8 @@ for element in mdl.elements:
             bending_sections.add(line, color=Color.pink(), linewidth=0.5+8*abs(sf_result.Mz_1/max_value))
         else :
             bending_sections.add(line, color=Color.grey(), opacity=0.3)
-add_text_label(viewer=viewer, text=str(int(max_bending.Mz_1/1000000))+ " kN.m", x=max_bending.reference_point.x+1000 , y= max_bending.reference_point.y, parent=bending_sections, color = Color.blue(), scale=200, show=True)
-add_text_label(viewer=viewer, text=str(abs(int(min_bending.Mz_2/1000000)))+ " kN.m", x=min_bending.reference_point.x+1000 , y= min_bending.reference_point.y, parent=bending_sections, color = Color.red(), scale=200, show=True)
+# add_text_label(viewer=viewer, text=str(int(max_bending.Mz_1/1000000))+ " kN.m", x=max_bending.reference_point.x+1000 , y= max_bending.reference_point.y, parent=bending_sections, color = Color.blue(), scale=200, show=True)
+# add_text_label(viewer=viewer, text=str(abs(int(min_bending.Mz_2/1000000)))+ " kN.m", x=min_bending.reference_point.x+1000 , y= min_bending.reference_point.y, parent=bending_sections, color = Color.red(), scale=200, show=True)
 
 #LOADS
 applied_loads = viewer.scene.add_group(name='Applied loads')
@@ -406,7 +419,7 @@ for load_field in stp.loads:
 # BOUNDARY CONDITIONS
 bc_viewer = viewer.scene.add_group(name='BC')
 for node in fixed_nodes:
-    bc_viewer.add(node.point, pointcolor = Color.black(), pointsize = 30)
+    bc_viewer.add(node.point, pointcolor = Color.black(), pointsize = 10)
 
 # SECITON FORCES
 # section_forces = viewer.scene.add_group(name='Section forces')
