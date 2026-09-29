@@ -50,6 +50,10 @@ show_stresses = True
 # False -> those tags are added but hidden
 TAG = True
 SAINT_ANDRE = True
+# True  -> each diagonal spans two cells (governing node i -> i+2) instead of
+#          one; a leftover odd cell at the end of a bay keeps a one-cell diagonal
+# False -> each diagonal spans one cell (governing node i -> i+1)
+ONE_OVER_TWO = True
 # True  -> RESERVED_STRUTS/DIAGONALS/BEAMS_INDEX carve the reservation
 #          (opening) out of the diaphragm, as usual
 # False -> reservation is ignored: the diaphragm is built as a full grid
@@ -476,14 +480,24 @@ sec_diag  = RectangularSection(w=w_sec * u.mm, h=h_sec * u.mm, material=mat_diag
 # mat_diag  = UniaxialBilinearMaterial(kc=E_diag_eq, epsyc= -100/L_tie)
 # sec_diag  = TrussSection(A=A_sec, material=mat_diag)
 
+def _cell_reserved(r0, r1, j):
+    """True if either one-cell diagonal between rows r0/r1 in bay j is reserved."""
+    return (frozenset((node_matrix[r0][j], node_matrix[r1][j + 1])) in reserved_diagonals
+            or frozenset((node_matrix[r1][j], node_matrix[r0][j + 1])) in reserved_diagonals)
+
+diag_span = 2 if ONE_OVER_TWO else 1  # number of cells crossed by a diagonal
 for j in range(len(x_steps)):
-    for i in range(len(governing_nodes_per_bay[j])-1):
-        node_indice1 = governing_nodes_per_bay[j][i]
-        node_indice2 = governing_nodes_per_bay[j][i+1]
+    governing = governing_nodes_per_bay[j]
+    for i in range(0, len(governing) - 1, diag_span):
+        # Rows crossed by this diagonal (shorter at the end of the bay if the
+        # number of cells is not a multiple of diag_span)
+        rows = governing[i:i + diag_span + 1]
+        node_indice1, node_indice2 = rows[0], rows[-1]
+        # Skip the whole diagonal if it crosses any reserved cell
+        if any(_cell_reserved(r0, r1, j) for r0, r1 in zip(rows[:-1], rows[1:])):
+            continue
         for n0, n1 in [(node_matrix[node_indice1][j],     node_matrix[node_indice2][j + 1]),
                        (node_matrix[node_indice2][j], node_matrix[node_indice1][j + 1])]:
-            if frozenset((n0, n1)) in reserved_diagonals:
-                continue
             elem = TrussElement(nodes=[n0, n1], section=sec_diag)
             prt.add_element(elem)
             diags.add(Line(n0.point, n1.point), color=Color.orange())
