@@ -31,7 +31,7 @@ TEMP = os.path.join(HERE, "..", "..", "temp")
 #  CASE CONFIGURATION — change only this variable
 # ==============================================================
 floor_type = 'L1'  # 'L1' | 'ROOF'
-date = '260724'
+date = '260904_wallbutresses'
 
 # ==============================================================
 #  RESERVATIONS (openings) — node-index pairs (row, col) in node_matrix,
@@ -136,6 +136,14 @@ TIES_AS_BEAMS_INDEX = {
     ],
 }
 
+# Saint-André cross (X-brace) added inside the reservation opening, spanning
+# the full height of the opening (rows) between the two given columns.
+# Built with a very stiff HEB profile (rigid strut, not the standard tie/diag).
+SAINT_ANDRE_BRACING = {
+    'L1':   {'rows': (6, 10), 'columns': (-2, -1), 'section': 'HEB600'},
+    'ROOF': None,
+}
+
 # ==============================================================
 #  CASE PARAMETER TABLES
 # ==============================================================
@@ -148,7 +156,7 @@ BEAM_SECTION = {
 
 FLOOR_STIFFNESS = {
     'L1': {
-        'LOW':      {'k_floor_shear': 107000, 'k_floor': 1500000},
+        'LOW':      {'k_floor_shear': 91000, 'k_floor': 1500000},
         'HIGH-SLS': {'k_floor_shear': 200000, 'k_floor': 1500000},
         'HIGH-ULS': {'k_floor_shear': 240000, 'k_floor': 1500000},
     },
@@ -162,13 +170,13 @@ FLOOR_STIFFNESS = {
 # Support indices (row, col) in node_matrix; negative indices count from end
 FIXED_NODES_INDEX = {
     'L1': {
-        'X+': [(0,  1), (0,  5), (-1,  1), (-1,  5), (6, -1), (10, -1), (6, -2), (10, -2)],
+        'X+': [(0,  1), (0,  4), (-1,  1), (-1,  4), (6, -1), (10, -1), (6, -2), (10, -2)],
         'X-': [(-1, 1), (-1, 3), (0,   1), (0,   3), (6, -1), (10, -1), (6, -2), (10, -2)],
         'Y+': [(2,  0), (15, 0), (2,  -1), (15, -1), (6, -1), (10, -1), (6, -2), (10, -2)],
         'Y-': [(2,  0), (15, 0), (2,  -1), (15, -1), (6, -1), (10, -1), (6, -2), (10, -2)],
     },
     'ROOF': {
-        'X+': [(-1, 4), (-1, 2), (0,  4), (0,  2)],
+        'X+': [(-1, 5), (-1, 2), (0,  5), (0,  2)],
         'X-': [(-1, 0), (-1, 4), (0,  0), (0,  4)],
         'Y+': [(7,  0), (-1, 0), (7, -1), (-1, -1)],
         'Y-': [(0,  0), (22, 0), (0, -1), (22, -1)],
@@ -238,6 +246,8 @@ GOVERNING_NODES_PER_BAY = {
     ],
 }
 
+WIND_DIRECTIONS = ['X+', 'X-', 'Y+', 'Y-']
+
 CASES = [
     ('X+', 'SLS'), ('X+', 'ULS'),
     ('X-', 'SLS'), ('X-', 'ULS'),
@@ -252,8 +262,8 @@ UMAX = {
 }
 
 STIFFNESSES = ['LOW',
-               'HIGH-SLS',
-               'HIGH-ULS'
+            #    'HIGH-SLS',
+            #    'HIGH-ULS'
                ]
 
 # Stiffness levels tied to a single load combination only run that combination's
@@ -278,11 +288,14 @@ def run_case(floor_type: str, wind_direction: str, combination: str, stiffness: 
     beam_section_name = BEAM_SECTION[floor_type]
     umax              = UMAX[stiffness]
 
-    d_tie      = 48
+    d_tie      = 30
     max_disp_c = umax
     x_steps    = X_STEPS[floor_type]
     y_steps    = Y_STEPS[floor_type]
     governing_nodes_per_bay = GOVERNING_NODES_PER_BAY[floor_type]
+    wall_buttresses = {'L1':
+                       [governing_nodes_per_bay[0][i] for i in range(1, len(governing_nodes_per_bay[0]) - 1, 2)]
+                       }
 
     mdl = Model(name="batch")
     prt = mdl.add_part(Part())
@@ -344,6 +357,22 @@ def run_case(floor_type: str, wind_direction: str, combination: str, stiffness: 
     mat_tie = UniaxialBilinearMaterial(kt=E_tie_eq, kc=E_floor_eq)
     sec_tie = TrussSection(A=A_sec, material=mat_tie)
 
+    # At the wall-buttress rows, the struts/ties funnel the buttress reaction
+    # into the diaphragm and need extra capacity — doubled tension stiffness
+    # (kt) there. Only the rows themselves are reinforced; the edge bays on
+    # those rows are already replaced by the rigid wall_buttress_pairs strut.
+    mat_tie_reinforced = UniaxialBilinearMaterial(kt=E_tie_eq * 2, kc=E_floor_eq)
+    sec_tie_reinforced = TrussSection(A=A_sec, material=mat_tie_reinforced)
+    wall_buttress_rows = set(wall_buttresses['L1'])
+
+    # Node pairs occupied by the rigid wall buttress struts (see ELEMENTS —
+    # wall buttress struts below) — the tie loop skips these so a normal tie
+    # isn't built in parallel with the rigid strut at the same location.
+    wall_buttress_pairs = set()
+    for j in wall_buttresses['L1']:
+        for col_a, col_b in ((-1, -2), (0, 1)):
+            wall_buttress_pairs.add(frozenset((node_matrix[j][col_a], node_matrix[j][col_b])))
+
     # Beam material/section defined here already: some struts/ties are built
     # as beams instead (see TIES_AS_BEAMS_INDEX).
     mat_beam = ElasticIsotropic(E=210 * u.GPa, v=0.2, density=2400 * u.kg_per_m3)
@@ -354,12 +383,32 @@ def run_case(floor_type: str, wind_direction: str, combination: str, stiffness: 
             n0, n1 = node_matrix[j][i], node_matrix[j][i + 1]
             if frozenset((n0, n1)) in reserved_struts:
                 continue
+            if frozenset((n0, n1)) in wall_buttress_pairs:
+                continue
             if frozenset((n0, n1)) in ties_as_beams:
                 elem = BeamElement(nodes=[n0, n1], section=sec_beam, orientation=[1, 0, 0])
                 prt.add_element(elem)
                 elements_classification['BEAMS'].append(elem)
                 continue
-            elem = TrussElement(nodes=[n0, n1], section=sec_tie)
+            tie_section = sec_tie_reinforced if j in wall_buttress_rows else sec_tie
+            elem = TrussElement(nodes=[n0, n1], section=tie_section)
+            prt.add_element(elem)
+            elements_classification['TIES'].append(elem)
+
+    # ELEMENTS — wall buttress struts. At every wall-buttress row, add a
+    # strut between the last two columns (-1/-2) and between the first two
+    # columns (0/1), connecting the buttress support to the diaphragm edge.
+    # Plain elastic truss elements sized on a stiff steel profile (HEB200)
+    # so they behave as near-rigid struts.
+    strut_profile   = ISection.HEB200(material=mat_beam)
+    sec_strut_rigid = TrussSection(A=strut_profile.A, material=mat_beam)
+
+    for j in wall_buttresses['L1']:
+        for col_a, col_b in ((-1, -2), (0, 1)):
+            n0, n1 = node_matrix[j][col_a], node_matrix[j][col_b]
+            if frozenset((n0, n1)) in reserved_struts:
+                continue
+            elem = TrussElement(nodes=[n0, n1], section=sec_strut_rigid)
             prt.add_element(elem)
             elements_classification['TIES'].append(elem)
 
@@ -398,21 +447,34 @@ def run_case(floor_type: str, wind_direction: str, combination: str, stiffness: 
             prt.add_element(elem)
             elements_classification['BEAMS'].append(elem)
 
-    not_fixed_nodes = [n for n in mdl.nodes if n not in fixed_nodes]
+    # ELEMENTS — Saint-André braces (X-braces) in the reservation opening.
+    # One small rigid HEB cross per bay, stacked over the full height of the
+    # opening, added on top of the (already carved-out) struts/diagonals.
+    saint_andre = SAINT_ANDRE_BRACING[floor_type]
+    if saint_andre:
+        row0, row1 = saint_andre['rows']
+        col0, col1 = saint_andre['columns']
+        sec_brace  = getattr(ISection, saint_andre['section'])(material=mat_beam)
+
+        for row in range(row0, row1):
+            for n0, n1 in [(node_matrix[row][col0], node_matrix[row + 1][col1]),
+                           (node_matrix[row][col1], node_matrix[row + 1][col0])]:
+                elem = BeamElement(nodes=[n0, n1], section=sec_brace, orientation=[1, 0, 0])
+                prt.add_element(elem)
+                elements_classification['BEAMS'].append(elem)
 
     # The first 4 entries of fixed_nodes_index are the direction-specific corner
-    # supports (1 full pin + 3 sliding); any further entries are diaphragm nodes
-    # that must always be blocked in both directions regardless of wind direction.
-    primary_fixed_nodes   = fixed_nodes[:4]
-    diaphragm_fixed_nodes = fixed_nodes[4:]
+    # supports (1 full pin + 3 sliding); any further entries are diaphragm nodes,
+    # which stay free (matching Diaphragm_reservations.py's default
+    # DIAPHRAGM_FIXED=False / BC_PERM=False behaviour).
+    primary_fixed_nodes = fixed_nodes[:4]
+    not_fixed_nodes = [n for n in mdl.nodes if n not in primary_fixed_nodes]
 
     bc_full    = MechanicalBC(x=True,  y=True,  z=True, xx=True, yy=True, zz=False)
     bc_sliding = MechanicalBC(**BC1_PARAMS[wind_direction])
     bc_free    = MechanicalBC(x=False, y=False, z=True, xx=True, yy=True, zz=False)
-    # mdl.add_bcs(bc_fields=BoundaryConditionsField(distribution=primary_fixed_nodes[0],  condition=bc_full))
+    mdl.add_bcs(bc_fields=BoundaryConditionsField(distribution=primary_fixed_nodes[0],  condition=bc_full))
     mdl.add_bcs(bc_fields=BoundaryConditionsField(distribution=primary_fixed_nodes[1:], condition=bc_sliding))
-    if diaphragm_fixed_nodes:
-        mdl.add_bcs(bc_fields=BoundaryConditionsField(distribution=diaphragm_fixed_nodes, condition=bc_full))
     mdl.add_bcs(bc_fields=BoundaryConditionsField(distribution=not_fixed_nodes, condition=bc_free))
 
     prb = mdl.add_problem(problem=Problem(name=f"batch_{floor_type}_{stiffness}_{combination}"))
@@ -442,6 +504,7 @@ def run_case(floor_type: str, wind_direction: str, combination: str, stiffness: 
 
     return {
         'wind':       wind_direction,
+        'stiffness':  stiffness,
         'comb':       combination,
         'ux_max':     round(abs(max_x.x), 2),
         'uy_max':     round(abs(max_y.y), 2),
@@ -459,27 +522,25 @@ def run_case(floor_type: str, wind_direction: str, combination: str, stiffness: 
 # ==============================================================
 #  BATCH LOOP
 # ==============================================================
-all_results = {}   # stiffness → list of row dicts
+all_results = {w: [] for w in WIND_DIRECTIONS}   # wind direction → list of row dicts (all stiffnesses)
 
 for stiffness in STIFFNESSES:
     print(f"\n{'='*60}")
     print(f"  STIFFNESS: {stiffness}")
     print(f"{'='*60}")
-    rows = []
     required_combination = STIFFNESS_COMBINATION.get(stiffness)
     for wind_dir, combination in CASES:
         if required_combination and combination != required_combination:
             continue
         res = run_case(floor_type, wind_dir, combination, stiffness)
-        rows.append(res)
-    all_results[stiffness] = rows
+        all_results[wind_dir].append(res)
 
 
 # ==============================================================
-#  EXCEL EXPORT
+#  EXCEL EXPORT — one sheet per wind direction, rows grouped by stiffness
 # ==============================================================
 HEADERS = [
-    'Vent', 'Combinaison',
+    'Stiffness', 'Combinaison',
     'ux_max [mm]', 'uy_max [mm]',
     'FLOOR MAX [kN]', 'TIE MIN [kN]',
     'DIAG MAX [kN]', 'DIAG MIN [kN]',
@@ -488,7 +549,7 @@ HEADERS = [
 ]
 
 ROW_KEYS = [
-    'wind', 'comb',
+    'stiffness', 'comb',
     'ux_max', 'uy_max',
     'floor_max', 'tie_min',
     'diag_max', 'diag_min',
@@ -498,12 +559,19 @@ ROW_KEYS = [
 
 # Styles
 HDR_FONT  = Font(bold=True, color='FFFFFF')
-HDR_FILLS = {
-    'LOW':      PatternFill('solid', fgColor='1F5C99'),
-    'HIGH-SLS': PatternFill('solid', fgColor='1F7A4D'),
-    'HIGH-ULS': PatternFill('solid', fgColor='8B1A1A'),
+WIND_FILLS = {
+    'X+': PatternFill('solid', fgColor='1F5C99'),
+    'X-': PatternFill('solid', fgColor='1F7A99'),
+    'Y+': PatternFill('solid', fgColor='1F7A4D'),
+    'Y-': PatternFill('solid', fgColor='8B1A1A'),
 }
-ALT_FILL    = PatternFill('solid', fgColor='EAF0FB')
+# Light row tint per stiffness, so the three stiffness blocks stay visually
+# distinct within a single wind-direction sheet.
+STIFFNESS_ROW_FILLS = {
+    'LOW':      PatternFill('solid', fgColor='EAF0FB'),
+    'HIGH-SLS': PatternFill('solid', fgColor='E9F7EF'),
+    'HIGH-ULS': PatternFill('solid', fgColor='FBEAEA'),
+}
 THIN_BORDER = Border(
     left=Side(style='thin'), right=Side(style='thin'),
     top=Side(style='thin'),  bottom=Side(style='thin'),
@@ -513,30 +581,29 @@ CENTER = Alignment(horizontal='center', vertical='center')
 wb = openpyxl.Workbook()
 wb.remove(wb.active)  # remove default empty sheet
 
-for stiffness, rows in all_results.items():
-    ws = wb.create_sheet(title=stiffness)
+for wind_dir in WIND_DIRECTIONS:
+    rows = all_results[wind_dir]
+    ws = wb.create_sheet(title=wind_dir)
 
     # Sheet title
     ws.merge_cells(f"A1:{get_column_letter(len(HEADERS))}1")
     title_cell = ws.cell(row=1, column=1,
-                         value=f"{floor_type} — {stiffness}  |  "
-                               f"k_shear={FLOOR_STIFFNESS[floor_type][stiffness]['k_floor_shear']} N/mm  "
-                               f"k_floor={FLOOR_STIFFNESS[floor_type][stiffness]['k_floor']} N/mm")
+                         value=f"{floor_type} — Vent {wind_dir}")
     title_cell.font      = Font(bold=True, size=12, color='FFFFFF')
-    title_cell.fill      = HDR_FILLS[stiffness]
+    title_cell.fill      = WIND_FILLS[wind_dir]
     title_cell.alignment = CENTER
 
     # Column headers
     for col, header in enumerate(HEADERS, start=1):
         cell = ws.cell(row=2, column=col, value=header)
         cell.font      = HDR_FONT
-        cell.fill      = HDR_FILLS[stiffness]
+        cell.fill      = WIND_FILLS[wind_dir]
         cell.alignment = CENTER
         cell.border    = THIN_BORDER
 
     # Data rows
     for row_idx, res in enumerate(rows, start=3):
-        fill = ALT_FILL if row_idx % 2 == 0 else None
+        fill = STIFFNESS_ROW_FILLS.get(res['stiffness'])
         for col, key in enumerate(ROW_KEYS, start=1):
             cell = ws.cell(row=row_idx, column=col, value=res[key])
             cell.alignment = CENTER
@@ -545,7 +612,7 @@ for stiffness, rows in all_results.items():
                 cell.fill = fill
 
     # Column widths
-    col_widths = [8, 12] + [14] * (len(HEADERS) - 2)
+    col_widths = [10, 12] + [14] * (len(HEADERS) - 2)
     for col, width in enumerate(col_widths, start=1):
         ws.column_dimensions[get_column_letter(col)].width = width
 
@@ -561,9 +628,11 @@ print(f"\nExcel exporté : {excel_path}")
 # ==============================================================
 #  CONSOLE SUMMARY
 # ==============================================================
-for stiffness, rows in all_results.items():
+for wind_dir in WIND_DIRECTIONS:
+    rows = all_results[wind_dir]
     print(f"\n{'='*60}")
-    print(f"  {stiffness}")
+    print(f"  VENT: {wind_dir}")
+    print(f"{'='*60}")
     print('  ' + '\t'.join(HEADERS))
     for r in rows:
         print('  ' + '\t'.join(str(r[k]) for k in ROW_KEYS))
